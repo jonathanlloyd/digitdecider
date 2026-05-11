@@ -3,14 +3,47 @@
 from io import BytesIO
 
 from fastapi import FastAPI, UploadFile
+from fastapi.responses import FileResponse
 from PIL import Image
+import torch
+import torchvision.transforms.functional as TF
 import uvicorn
 
+import digitdecider
+from digitdecider import ModelParams
+
 app = FastAPI()
+with open("./weights/digitdecider.safetensors", "rb") as f:
+    model_params = ModelParams.from_safetensors_no_grad(f.read())
+
+
+@app.get("/")
+async def index():
+    return FileResponse("./static/index.html")
 
 
 @app.post("/predict")
 async def predict(file: UploadFile):
+    img_bytes = await file.read()
+    img = Image.open(BytesIO(img_bytes))
+
+    normalized_img = _normalize_image(img)
+    img_tensor = _image_to_tensor(normalized_img)
+
+    logits = digitdecider.forward_pass(img_tensor, model_params)
+    probs = torch.softmax(logits, dim=1)[0]
+
+    prediction = torch.argmax(logits).item()
+    confidence = probs[prediction].item()
+
+    return {
+        "prediction": prediction,
+        "confidence": confidence,
+    }
+
+
+@app.post("/normalize")
+async def normalize(file: UploadFile):
     img_bytes = await file.read()
     img = Image.open(BytesIO(img_bytes))
     normalized_img = _normalize_image(img)
@@ -26,6 +59,12 @@ def _normalize_image(img: Image.Image) -> Image.Image:
     img = img.convert("L")
     img = img.resize((28, 28), Image.LANCZOS)
     return img
+
+
+def _image_to_tensor(img: Image.Image) -> torch.Tensor:
+    tensor_3d = TF.to_tensor(img)
+    tensor_4d = tensor_3d.unsqueeze(0)
+    return tensor_4d
 
 
 if __name__ == "__main__":

@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>digitdecider</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0a0a0a;
+        --fg: #f5f5f5;
+        --accent: #7cf0ff;
+        --muted: #888;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        min-height: 100vh;
+      }
+      main {
+        max-width: 480px;
+        margin: 0 auto;
+        padding: 32px 16px 48px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 20px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 18px;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .canvas-wrap {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        border: 1px solid #222;
+        border-radius: 8px;
+        overflow: hidden;
+        background: #000;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+        background: #000;
+        touch-action: none;
+        cursor: crosshair;
+      }
+      .controls {
+        display: flex;
+        gap: 12px;
+        width: 100%;
+      }
+      button {
+        flex: 1;
+        padding: 14px 20px;
+        font: inherit;
+        font-size: 16px;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        background: var(--fg);
+        color: var(--bg);
+        border: 0;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: transform 0.05s ease, opacity 0.15s ease;
+      }
+      button.secondary {
+        flex: 0 0 auto;
+        background: transparent;
+        color: var(--muted);
+        border: 1px solid #333;
+      }
+      button:hover { opacity: 0.9; }
+      button:active { transform: translateY(1px); }
+      button:disabled { opacity: 0.4; cursor: not-allowed; }
+      .result {
+        width: 100%;
+        min-height: 88px;
+        padding: 16px;
+        border: 1px solid #222;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 24px;
+      }
+      .result.empty { color: var(--muted); font-size: 14px; }
+      .digit {
+        font-size: 56px;
+        line-height: 1;
+        color: var(--accent);
+        font-weight: 600;
+      }
+      .confidence {
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .confidence strong { color: var(--fg); font-weight: 500; }
+      .error { color: #ff7a7a; font-size: 14px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>digitdecider</h1>
+      <div class="canvas-wrap">
+        <canvas id="pad" width="280" height="280"></canvas>
+      </div>
+      <div class="controls">
+        <button id="predict">Predict</button>
+        <button id="debug" class="secondary">Debug</button>
+        <button id="clear" class="secondary">Clear</button>
+      </div>
+      <div id="result" class="result empty">draw a digit, then predict</div>
+    </main>
+    <script>
+      const canvas = document.getElementById("pad");
+      const ctx = canvas.getContext("2d");
+      const predictBtn = document.getElementById("predict");
+      const debugBtn = document.getElementById("debug");
+      const clearBtn = document.getElementById("clear");
+      const resultEl = document.getElementById("result");
+
+      function resetCanvas() {
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.strokeStyle = "#fff";
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.lineWidth = 18;
+      }
+      resetCanvas();
+
+      let drawing = false;
+      let last = null;
+
+      function pointFromEvent(e) {
+        const rect = canvas.getBoundingClientRect();
+        const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+        const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+        return { x, y };
+      }
+
+      function start(e) {
+        e.preventDefault();
+        drawing = true;
+        last = pointFromEvent(e);
+        ctx.beginPath();
+        ctx.arc(last.x, last.y, ctx.lineWidth / 2, 0, Math.PI * 2);
+        ctx.fillStyle = "#fff";
+        ctx.fill();
+      }
+      function move(e) {
+        if (!drawing) return;
+        e.preventDefault();
+        const p = pointFromEvent(e);
+        ctx.beginPath();
+        ctx.moveTo(last.x, last.y);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+        last = p;
+      }
+      function end(e) {
+        if (!drawing) return;
+        e.preventDefault();
+        drawing = false;
+        last = null;
+      }
+
+      canvas.addEventListener("pointerdown", start);
+      canvas.addEventListener("pointermove", move);
+      canvas.addEventListener("pointerup", end);
+      canvas.addEventListener("pointercancel", end);
+      canvas.addEventListener("pointerleave", end);
+
+      clearBtn.addEventListener("click", () => {
+        resetCanvas();
+        resultEl.className = "result empty";
+        resultEl.textContent = "draw a digit, then predict";
+      });
+
+      function canvasBlob() {
+        return new Promise((resolve, reject) =>
+          canvas.toBlob(
+            (b) => (b ? resolve(b) : reject(new Error("toBlob failed"))),
+            "image/png",
+          ),
+        );
+      }
+
+      debugBtn.addEventListener("click", async () => {
+        debugBtn.disabled = true;
+        resultEl.className = "result empty";
+        resultEl.textContent = "normalizing…";
+        try {
+          const blob = await canvasBlob();
+          const form = new FormData();
+          form.append("file", blob, "digit.png");
+          const res = await fetch("/normalize", { method: "POST", body: form });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          await res.json();
+          resultEl.className = "result empty";
+          resultEl.textContent = "normalized → ./test-data/output.png";
+        } catch (err) {
+          resultEl.className = "result error";
+          resultEl.textContent = `error: ${err.message}`;
+        } finally {
+          debugBtn.disabled = false;
+        }
+      });
+
+      predictBtn.addEventListener("click", async () => {
+        predictBtn.disabled = true;
+        resultEl.className = "result empty";
+        resultEl.textContent = "predicting…";
+        try {
+          const blob = await canvasBlob();
+          const form = new FormData();
+          form.append("file", blob, "digit.png");
+          const res = await fetch("/predict", { method: "POST", body: form });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const { prediction, confidence } = await res.json();
+          const pct = (confidence * 100).toFixed(1);
+          resultEl.className = "result";
+          resultEl.innerHTML = `
+            <div class="digit">${prediction}</div>
+            <div class="confidence">confidence <strong>${pct}%</strong></div>
+          `;
+        } catch (err) {
+          resultEl.className = "result error";
+          resultEl.textContent = `error: ${err.message}`;
+        } finally {
+          predictBtn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

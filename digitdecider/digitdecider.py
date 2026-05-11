@@ -45,7 +45,21 @@ class ModelParams:
 
 
 def make_training_data_loader():
-    transform = transforms.ToTensor()
+    # Turn images into tensors
+    # but first, make random changes rotating/stretching/moving/skewing the
+    # images so the model learns a more robust generalisation (mnist is very
+    # uniform)
+    transform = transforms.Compose(
+        [
+            transforms.RandomAffine(
+                degrees=10,  # rotate ±10°
+                translate=(0.1, 0.1),  # shift up to 10% in each direction
+                scale=(0.85, 1.15),  # scale 85%–115%
+                shear=10,  # shear up to 10°
+            ),
+            transforms.ToTensor(),
+        ]
+    )
     training_data = torchvision.datasets.MNIST(
         root="./data", train=True, download=True, transform=transform
     )
